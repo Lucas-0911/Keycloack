@@ -652,18 +652,18 @@ docker-compose up -d --build
 
 1. **Nguyên nhân:** Người dùng đã từng mở tài khoản thủ công bằng Email. Sau đó lại dùng tính năng "Đăng nhập với Google" với cùng email đó. Mặc định Keycloak sẽ cấm gộp (Account already exists) để chống thủ đoạn tạo Fake Email. Ngoài ra nếu bạn sửa luồng `first broker login` cũ sai cách thì có thể vướng form ẩn và sẽ bị báo "Invalid username or password".
 2. **Cách khắc phục (Tạo 1 luồng duy nhất siêu sạch để tự động gộp):**
-   Thay vì sửa luồng mặc định cực kỳ lằng nhằng, hãy lập một luồng mới:
-   - Đăng nhập Keycloak Admin.
+   Thay vì sửa luồng mặc định cực kỳ lằng nhằng, hãy lập một luồng Authentication mới:
+   - Đăng nhập Keycloak Admin (`http://localhost:9090/admin`).
    - Vào mục **Authentication**, nhấp vào nút **Create flow** ở góc trên.
    - **Name:** `Google Auto Link` | **Flow type:** Chọn `Basic flow` -> Nhấn **Create**.
-   - Tại màn hình luồng vừa tạo trơn tru, bấm **Add execution** và thêm lần lượt đúng 3 dòng này, sau đó nhớ đổi cột trạng thái (Requirement) cho chúng:
-     - Thêm `Detect existing broker user` -> Đổi thiết lập thành **REQUIRED**.
-     - Thêm `Automatically set existing user` -> Đổi thiết lập thành **ALTERNATIVE**.
-     - Thêm `Create user if unique` -> Đổi thiết lập thành **ALTERNATIVE**.
-   *(Logic của kiến trúc này: Đầu tiên tìm hệ thống có email đó chưa. Nếu có rồi, nó thực hiện luôn lệnh Cài tự động (Set existing user) để gộp. Nếu email mới tinh, nó bỏ qua gộp và đi tìm thực hiện lệnh dưới cùng là Create để tạo tài khoản).*
-   - Vào lại mục **Identity providers** ở menu trái -> chọn **Google** -> mở cụm **Advanced settings**.
-   - Dò đến ô **First login flow** và bấm đổi nó sang luồng `Google Auto Link` mới tinh của bạn. 
-   - Kéo xuống ấn **Save** lưu lại. Từ nay việc đăng nhập qua Google sẽ luôn trơn tru và tự gộp chuẩn xác!
+   - Tại màn hình luồng vừa tạo, bấm nút **Add execution** (Thêm thực thi) và tìm lần lượt đúng 3 dòng này chèn vào. **Đây là thứ tự sống còn, tuyệt đối không được sắp xếp sai**:
+     - Dòng 1: `Detect existing broker user` -> Bấm nút răng cưa bên phải, đổi thiết lập (Requirement) thành **ALTERNATIVE**.
+     - Dòng 2: `Create user if unique` -> Đổi thiết lập thành **ALTERNATIVE**.
+     - Dòng 3: `Automatically set existing user` -> Đổi thiết lập thành **ALTERNATIVE**.
+   *(Logic luồng chạy chuẩn: Dòng 1 tìm xem user có từng kết nối Google chưa. Nếu chưa, Dòng 2 lập tức chạy tìm cách tạo tài khoản DB mới, nhưng phát hiện bị trùng Email nên văng lỗi dở dang và lưu Email đó lên bộ nhớ ngầm. Dòng 3 ngay lập tức lao ra hứng cái sự kiện đụng xe đó, cầm Email đó gộp cái rụp vào user cũ!)*
+   - Vào lại mục **Identity providers** ở menu trái -> chọn **Google** -> kéo xuống mở cụm **Advanced settings**.
+   - Tìm đến ô **First login flow** và bấm chọn nó sang cái luồng `Google Auto Link` mới tinh của bạn. 
+   - Kéo xuống ấn **Save** lưu lại. Từ nay việc đăng nhập qua Google đã trở nên thần thánh: Vừa tự tạo acc cho user mới, vừa tự link cho user cũ!
 
 ---
 
@@ -706,15 +706,66 @@ const urlParams = new URLSearchParams(window.location.search);
 const code = urlParams.get('code');
 const state = urlParams.get('state');
 
-// 2. Gửi API mang code đi lấy Access Token như bình thường...
-await exchangeToken(code); 
+// 2. Gửi API đổi Code lấy JWT Token
+if (code) {
+    const loginSuccess = await exchangeToken(code); 
 
-// 3. Giải mã URL và bẻ lái Router về trang đích gốc
-if (state) {
-    const originalPath = atob(state); // Giải mã 'L2NhcnQ=' về lại '/cart'
-    window.location.href = originalPath; // Hoặc dùng react-router: navigate(originalPath)
-} else {
-    window.location.href = '/home'; // Mặc định về trang chủ nếu không có state
+    if (loginSuccess) {
+        // 3. Giải mã URL và bẻ lái Router về trang đích gốc
+        if (state) {
+            const originalPath = atob(state); // Giải mã 'L2NhcnQ=' về lại '/cart'
+            window.location.href = originalPath; // Hoặc dùng react-router: navigate(originalPath)
+        } else {
+            window.location.href = '/home'; // Mặc định về trang chủ nếu không có state
+        }
+    }
+}
+
+// =====================================================================
+// HÀM GỌI API - CHUYỂN ĐỔI AUTH CODE LẤY ACCESS TOKEN TỪ KEYCLOAK
+// =====================================================================
+async function exchangeToken(authCode) {
+    const tokenUrl = "http://localhost:8080/realms/flash-dtf/protocol/openid-connect/token";
+
+    // Phải nén dữ liệu dưới dạng URLSearchParams (Keycloak yêu cầu content-type này)
+    const params = new URLSearchParams();
+    params.append("grant_type", "authorization_code");
+    params.append("client_id", "your-client"); // Thay ID Client của bạn vào đây
+    
+    // Nếu Client bạn cài trên Keycloak bật Client authentication = ON (Confidential) thì thêm dòng secret
+    // Nếu Frontend là Public Client (như React/Vue thông thường) thì KHÔNG CẦN dòng này
+    params.append("client_secret", "your-client-secret"); 
+    
+    // BẮT BUỘC phải giống y chang cái link Callback URL bạn đã gọi ban nãy
+    params.append("redirect_uri", "http://localhost:3000/callback"); 
+    params.append("code", authCode);
+
+    try {
+        const response = await fetch(tokenUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: params
+        });
+
+        if (!response.ok) {
+            console.error("Lỗi khi đổi token:", await response.text());
+            return false;
+        }
+
+        // Lấy thành công Access Token
+        const tokens = await response.json();
+        
+        // Lưu token vào bộ nhớ ảo hoặc LocalStorage để bám víu gửi kèm lên API Backend
+        localStorage.setItem("access_token", tokens.access_token);
+        localStorage.setItem("refresh_token", tokens.refresh_token);
+        
+        return true;
+    } catch (error) {
+        console.error("Lý do thất bại:", error);
+        return false;
+    }
 }
 ```
 
