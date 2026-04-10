@@ -1,0 +1,16 @@
+# Build artifacts
+extensions/*/target/
+providers/*.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+mysql_data/
+rabbitmq_data/

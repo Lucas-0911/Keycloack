@@ -1,0 +1,15 @@
+FROM maven:3.9-eclipse-temurin-21 AS builder
+
+WORKDIR /build
+COPY extensions/keycloak-event-listener-rabbitmq/pom.xml ./pom.xml
+# Download dependencies first (better Docker cache)
+RUN mvn dependency:go-offline -q
+
+COPY extensions/keycloak-event-listener-rabbitmq/src ./src
+RUN mvn clean package -q -DskipTests
+
+# =============================================
+# Final: Copy JAR to providers directory
+# =============================================
+FROM busybox AS output
+COPY --from=builder /build/target/keycloak-event-listener-rabbitmq-1.0.0.jar /providers/
